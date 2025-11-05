@@ -14,6 +14,9 @@ import "@openzeppelin/access/Ownable.sol";
 import "@openzeppelin/utils/Pausable.sol";
 import "@openzeppelin/access/AccessControl.sol";
 
+// !TODO: Implementar el proxy
+import "@openzeppelin/proxy/utils/UUPSUpgradeable.sol";
+
 /// @notice ChainLink Interface import
 /// @dev We use data feeds interface
 import "@chainlink/interfaces/AggregatorV3Interface.sol";
@@ -44,22 +47,22 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Conversion decimals constant
     /// @dev We do the sum of ethereum decimals y chainlink decimals, then we substraction of the USDC decimals, it gave us the basis for equalization
-    uint constant DECIMAL_FACTOR = 1 * 10 ** 20;
+    uint64 constant DECIMAL_FACTOR = 1 * 10 ** 20;
 
     /// @notice Fixed Transaction threshold 
-    uint immutable i_threshold;
+    uint256 immutable i_threshold;
 
     /// @notice Global deposit limite
     /// @dev Keep in mind, global limit will be in USD
-    uint immutable i_bankCap;
+    uint256 immutable i_bankCap;
 
     ///@notice Total Ether deposited
     /// @dev Total of the contract it is counted in USD
-    uint private s_totalContract = 0;
+    uint256 private s_totalContract = 0;
 
     /// @notice Minimum deposit of Ether to the contract
     /// @dev Will use 1 Gwei as minimun
-    uint public constant MIN_DEPOSIT = 1 gwei;
+    uint256 public constant MIN_DEPOSIT = 1 gwei;
 
     /// @notice Deposits contract counter
     /// @notice Deposits count toward the contract
@@ -71,17 +74,17 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Storage struct that stores a token amount, in different tokens, for each address
     /// @dev In the first mapping we have token address, in the nested mapping we have the holder and their balance
-    mapping (address token => mapping (address holder => uint amount)) private s_balances;
+    mapping (address token => mapping (address holder => uint256 amount)) private s_balances;
 
     /// @notice Successful deposit made event
     /// @param holder Holder who made the deposit
     /// @param amount The Deposited amount
-    event KipuBank_SuccessfulDeposit(address indexed holder, uint amount);
+    event KipuBank_SuccessfulDeposit(address indexed holder, uint256 amount);
 
     /// @notice Successful withdrawal made
     /// @param holder The holder who perfomed the withdrawal
     /// @param amount The amount withdrawn
-    event KipuBank_SuccessfulWithdrawal(address indexed holder, uint amount);
+    event KipuBank_SuccessfulWithdrawal(address indexed holder, uint256 amount);
 
     /// @notice Feed update event
     /// @param previousFeed Was the previous feed address
@@ -91,12 +94,12 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Contract pause event
     /// @param pauser The address that paused the contract
     /// @param time The timestamp when was paused
-    event KipuBank_ContractPaused(address indexed pauser, uint time);
+    event KipuBank_ContractPaused(address indexed pauser, uint256 time);
 
     /// @notice Contract unpaused event
     /// @param unpauser The address that unpaused the contract
     /// @param time The timestamp when was unpaused
-    event KipuBank_ContractUnpaused(address indexed unpauser, uint time);
+    event KipuBank_ContractUnpaused(address indexed unpauser, uint256 time);
 
     /// @notice Ownership transfer event
     /// @param previousOwner The previous owner of the contract
@@ -116,20 +119,20 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Withdrawal rejected error 
     /// @param holder The holder that perfomed the withdrawal
     /// @param amount The amount to withdraw
-    error KipuBank_RejectedWithdraw(address holder, uint amount);
+    error KipuBank_RejectedWithdraw(address holder, uint256 amount);
 
     /// @notice Exceeding limit error
     /// @param amount The amount that exceeded the limite
-    error KipuBank_ExceededLimit(uint amount);
+    error KipuBank_ExceededLimit(uint256 amount);
 
     /// @notice Insufficient funds error
     /// @param holder The holder with insufficient funds
     /// @param amount The amount to withdraw
-    error KipuBank_InsufficientsFunds(address holder, uint amount);
+    error KipuBank_InsufficientsFunds(address holder, uint256 amount);
 
     /// @notice Threshold exceeded error
     /// @param amount The amount that exceeds the threshold
-    error KipuBank_ExceededThreshold(uint amount);
+    error KipuBank_ExceededThreshold(uint256 amount);
 
     /// @notice Zero amount error
     /// @param holder The holder who attempted a transaction with zero value
@@ -137,16 +140,16 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Invalid threshold error
     /// @param threshold The invalid threshold
-    error KipuBank_InvalidThreshold(uint threshold);
+    error KipuBank_InvalidThreshold(uint256 threshold);
 
     /// @notice Invalid limit error
     /// @param limit The limit that is invalid
-    error KipuBank_InvalidLimit(uint limit);
+    error KipuBank_InvalidLimit(uint256 limit);
 
     /// @notice Limit above threshold error
     /// @param threshold The attempted threshold of the contract
     /// @param limit The limit of the contract
-    error KipuBank_InvalidInit(uint limit, uint threshold);
+    error KipuBank_InvalidInit(uint256 limit, uint256 threshold);
 
     /// @notice Operation not permitted error
     /// @param holder The holder who attempted a non-permitted operation
@@ -154,11 +157,11 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Oracle price error
     /// @param price The incorrect price
-    error KipuBank_CommittedOracle(uint price);
+    error KipuBank_CommittedOracle(uint256 price);
 
     /// @notice Outdated price error
     /// @param price The outdate price
-    error KipuBank_OutdatedPrice(uint price);
+    error KipuBank_OutdatedPrice(uint256 price);
 
     /// @notice Invalid address set error
     error KipuBank_InvalidAddress();
@@ -173,11 +176,11 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Non-permitted deposit amount
     /// @param amount The exceeded amount
-    error KipuBank_NonPermittedAmount(uint amount);
+    error KipuBank_NonPermittedAmount(uint256 amount);
 
     /// @notice Amount lower than minimum deposit
     /// @param amount The amount that is below the minimum
-    error KipuBank_LowerMinimumAmount(uint amount);
+    error KipuBank_LowerMinimumAmount(uint256 amount);
 
     /// @notice Contract constructor
     /// @param _limit The global limit for the contract
@@ -186,8 +189,8 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @param _tokenERC20 The address of the ERC20 token to use
     /// @dev They must be generated at the time of deployment
     constructor(
-        uint _limit,
-        uint _threshold,
+        uint256 _limit,
+        uint256 _threshold,
         address _owner,
         address _feed,
         address _tokenERC20
@@ -229,7 +232,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Modifier to verify deposits
     /// @param _amountUSD The amount to verify
-    modifier verifyEthDeposit(uint _amountUSD, uint _amountETH) {
+    modifier verifyEthDeposit(uint256 _amountUSD, uint256 _amountETH) {
         if(_amountETH < MIN_DEPOSIT) revert KipuBank_LowerMinimumAmount(_amountETH);
         if(_amountUSD == 0) revert KipuBank_ZeroAmount(msg.sender);
         if(_amountUSD + s_totalContract > i_bankCap) revert KipuBank_ExceededLimit(_amountUSD);
@@ -238,7 +241,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Modifier to verify deposit in USDC
     /// @param _amount Is the amount to verify
-    modifier verifyUsdcAmount(uint _amount) {
+    modifier verifyUsdcAmount(uint256 _amount) {
         if(_amount == 0) revert KipuBank_ZeroAmount(msg.sender);
         if (_amount + s_totalContract > i_bankCap) revert KipuBank_ExceededLimit(_amount);
         _;
@@ -247,8 +250,8 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Modifier to verify withdrawal
     /// @param _amount The amount to verify to withdrawal
     /// @dev The threshold only applies to wihtdrawals
-    modifier verifyEthWithdraw(uint _amount) {
-        uint amountUSD = convertEthInUSD(_amount);
+    modifier verifyEthWithdraw(uint256 _amount) {
+        uint256 amountUSD = convertEthInUSD(_amount);
         if(amountUSD == 0) revert KipuBank_ZeroAmount(msg.sender);
         if (amountUSD > i_threshold) revert KipuBank_ExceededThreshold(amountUSD);
         if (_amount > s_balances[address(0)][msg.sender]) revert KipuBank_InsufficientsFunds(msg.sender, amountUSD);
@@ -258,7 +261,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Modifier to verify withdraws
     /// @param _amount The amount to verify
     /// @dev The threshold only it's applies to withdraws
-    modifier verifyWithdrawUSDC(uint _amount) {
+    modifier verifyWithdrawUSDC(uint256 _amount) {
         if(_amount == 0) revert KipuBank_ZeroAmount(msg.sender);
         if (_amount > i_threshold) revert KipuBank_ExceededThreshold(_amount);
         if (_amount > s_balances[address(i_usdc)][msg.sender]) revert KipuBank_InsufficientsFunds(msg.sender, _amount);
@@ -268,19 +271,19 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice The function to perform the price query using the oracle
     /// @return priceUSD_ It is return the USD Price
     /// @dev We use the ChainLink Oracle
-    function chainLinkFeeds() internal view returns(uint priceUSD_) {
+    function chainLinkFeeds() internal view returns(uint256 priceUSD_) {
         (, int256 ethUSDPrice,, uint256 updateAt,) = s_feed.latestRoundData();
-        if( ethUSDPrice <= 0) revert KipuBank_CommittedOracle(uint(ethUSDPrice));
-        if(block.timestamp - updateAt > HEARTBEAT) revert KipuBank_OutdatedPrice(uint(ethUSDPrice));
+        if( ethUSDPrice <= 0) revert KipuBank_CommittedOracle(uint256(ethUSDPrice));
+        if(block.timestamp - updateAt > HEARTBEAT) revert KipuBank_OutdatedPrice(uint256(ethUSDPrice));
 
-        priceUSD_ = uint(ethUSDPrice);
+        priceUSD_ = uint256(ethUSDPrice);
     }
 
     /// @notice The function to convert ETH to USDC
     /// @param _amount The entered amount to convert
     /// @return convertedAmount_ The amount converted
     /// @dev The operation perfomed is level the bases
-    function convertEthInUSD(uint _amount) internal view returns (uint convertedAmount_) {
+    function convertEthInUSD(uint256 _amount) internal view returns (uint256 convertedAmount_) {
             convertedAmount_ = (_amount* chainLinkFeeds()) / DECIMAL_FACTOR;
     }
 
@@ -288,8 +291,8 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @param _amount The amount to withdraw
     /// @dev Is updated the state before the transfer, CEI pattern
     /// @dev It is used the NonReentrant OpenZeppelin function
-    function _withdrawETH(uint _amount) private nonReentrant verifyEthWithdraw(_amount) {
-        uint amountUSD = convertEthInUSD(_amount);
+    function _withdrawETH(uint256 _amount) private nonReentrant verifyEthWithdraw(_amount) {
+        uint256 amountUSD = convertEthInUSD(_amount);
         s_balances[address(0)][msg.sender] -= _amount;
         s_withdrawal++;
         s_totalContract -= amountUSD;
@@ -305,7 +308,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @dev It is used the NonReentrant OpenZeppelin function
     /// @dev Is updated the state before the transfer, CEI pattern
     /// @dev It is used the SafeIERC20 interface of OpenZeppelin
-    function _withdrawUSDC(uint _amount) private nonReentrant verifyWithdrawUSDC(_amount) {
+    function _withdrawUSDC(uint256 _amount) private nonReentrant verifyWithdrawUSDC(_amount) {
         s_balances[address(i_usdc)][msg.sender] -= _amount;
         s_withdrawal++;
         s_totalContract -= _amount;
@@ -315,13 +318,13 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice External functoin to perform withdraw in ETH
     /// @param _amount The amount to withdraw
-    function withdrawETH(uint _amount) external whenNotPaused {
+    function withdrawETH(uint256 _amount) external whenNotPaused {
         _withdrawETH(_amount);
     }
     
     /// @notice External function to withdraw USDC
     /// @param _amount The amount to withdraw
-    function withdrawUSDC(uint _amount) external whenNotPaused {
+    function withdrawUSDC(uint256 _amount) external whenNotPaused {
         _withdrawUSDC(_amount);
     } 
 
@@ -330,7 +333,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @param _amountUSD The amount in USD to verify
     /// @param _amountETH The amount in ETH to deposit
     /// @dev A private function is implemented to save gas, calling the data feed
-    function _depositETH(address _holder, uint _amountUSD, uint _amountETH) private verifyEthDeposit(_amountUSD, _amountETH) {
+    function _depositETH(address _holder, uint256 _amountUSD, uint256 _amountETH) private verifyEthDeposit(_amountUSD, _amountETH) {
         s_balances[address(0)][_holder] += _amountETH;
         s_deposits++;
         s_totalContract += _amountUSD;
@@ -340,8 +343,8 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Function to deposit ETH
     /// @dev Must be payable
     function depositETH() external payable whenNotPaused {
-        uint amountETH = msg.value;
-        uint amountUSD = convertEthInUSD(amountETH);
+        uint256 amountETH = msg.value;
+        uint256 amountUSD = convertEthInUSD(amountETH);
         _depositETH(msg.sender, amountUSD, amountETH);
     }
 
@@ -349,7 +352,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @dev It is payable and use the verifyUsdcAmount modifier
     /// @dev It is used the SafeIERC20 interface to perform
     /// @dev We need the aprobation of the owner tokens
-    function depositUSDC(uint _amount) external verifyUsdcAmount(_amount) whenNotPaused {
+    function depositUSDC(uint256 _amount) external verifyUsdcAmount(_amount) whenNotPaused {
         if ( i_usdc.allowance(msg.sender, address(this)) < _amount ) revert KipuBank_NonPermittedAmount(_amount);
         s_balances[address(i_usdc)][msg.sender] += _amount;
         s_deposits++;
@@ -360,22 +363,22 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Function to view the balance in USD
     /// @return amount_ The amount of the total balance in USD
-    function viewAccountTotalBalance() external view returns (uint amount_) {
+    function viewAccountTotalBalance() external view returns (uint256 amount_) {
         amount_ = convertEthInUSD(s_balances[address(0)][msg.sender]) + s_balances[address(i_usdc)][msg.sender];
     }
 
     /// @notice Function to view the deposits count
-    function viewDepositsCount() external view returns (uint) {
+    function viewDepositsCount() external view returns (uint256) {
         return s_deposits;
     }
 
     /// @notice Function to view the withdraws count
-    function viewWithdrawCount() external view returns (uint) {
+    function viewWithdrawCount() external view returns (uint256) {
         return s_withdrawal;
     }
 
     /// @notice Function to view the contract balance in USD
-    function viewContractBalance() external view returns (uint) {
+    function viewContractBalance() external view returns (uint256) {
         return s_totalContract;
     }
 
@@ -409,7 +412,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
             uint80, int256 price, uint256, uint256 updateAt, uint80
         ) {
             if(price <= 0) revert KipuBank_InvalidFeed(_newFeed);
-            if(block.timestamp - updateAt > HEARTBEAT) revert KipuBank_OutdatedPrice(uint(price));
+            if(block.timestamp - updateAt > HEARTBEAT) revert KipuBank_OutdatedPrice(uint256(price));
             
             address previousFeed = address(s_feed);
             s_feed = AggregatorV3Interface(_newFeed);
@@ -462,9 +465,9 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     function viewContractState() external view 
     returns (
         bool isPaused,
-        uint totalContract,
-        uint limit,
-        uint threshold,
+        uint256 totalContract,
+        uint256 limit,
+        uint256 threshold,
         address actualFeed
     )
     {
@@ -480,7 +483,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Function to view to each tokens funds for holder
     /// @param _holder The holder of the account
     /// @param _token The token to consult
-    function balanceOf(address _holder, address _token) external view returns (uint) {
+    function balanceOf(address _holder, address _token) external view returns (uint256) {
         return s_balances[_token][_holder];
     }
 
