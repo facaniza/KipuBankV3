@@ -160,6 +160,14 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
         uint256 amountOut
     );
 
+    /// @notice Event that set a token in whitelist
+    /// @param token The token whas approved
+    event KipuBank_TokenApproved(address token);
+
+    /// @notice Event that remove a token in whitelis
+    /// @param token The token was removed
+    event KipuBank_TokenRemoved(address token);
+
     /// @notice Withdrawal rejected error 
     /// @param holder The holder that perfomed the withdrawal
     /// @param amount The amount to withdraw
@@ -341,6 +349,8 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     modifier verifyTokenDeposit(uint256 _amountIn, address _tokenIn, uint256 _deadline) {
         // function depositToken(uint256 _amountIn, uint256 _amountOut, address _tokenIn, uint256 _deadline) external {
         if(_amountIn == 0)  revert KipuBank_ZeroAmount(msg.sender);
+        if(_tokenIn == address(0)) revert KipuBank_InvalidAddress();
+        if(_tokenIn == address(i_usdc)) revert KipuBank_InvalidAddress();
         if(!s_allowedToken[_tokenIn]) revert KipuBank_InvalidAddress();
         if(_deadline < block.timestamp) revert KipuBank_ExceededTime(block.timestamp);
         _;
@@ -441,10 +451,10 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Function to deposit any token and receive USDC
     /// @param _amountIn The amount of the token that entered
-    /// @param _amountOut The minimum amount which is expected
+    /// @param _amountOutMin The minimum amount which is expected
     /// @param _tokenIn The address of the token whas received
     /// @param _deadline The deadline to perfom the swap
-    function depositToken(uint256 _amountIn, uint256 _amountOut, address _tokenIn, uint256 _deadline) external
+    function depositToken(uint256 _amountIn, uint256 _amountOutMin, address _tokenIn, uint256 _deadline) external
         verifyTokenDeposit(_amountIn, _tokenIn, _deadline)
         whenNotPaused
     {
@@ -463,11 +473,14 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
         uint[] memory amountsToSwap = ROUTER.swapExactTokensForTokens(
             _amountIn,
-            _amountOut,
+            _amountOutMin,
             path,
             address(this),
             _deadline
         );
+
+        if(amountsToSwap[amountsToSwap.length - 1] + s_totalContract > i_bankCap) revert KipuBank_ExceededLimit(amountsToSwap[amountsToSwap.length - 1]);
+
         emit KipuBank_SuccessfulSwap(
             msg.sender,
             _tokenIn,
@@ -477,19 +490,32 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
         );
         s_totalContract += amountsToSwap[amountsToSwap.length - 1];
         s_balances[address(i_usdc)][msg.sender] += amountsToSwap[amountsToSwap.length - 1];
-
     }
 
     /// @notice Function to approved tokens to swap
     /// @param _token The address token which was approved
     function approveToken(address _token) external whenPaused onlyOwner {
+        if(_token == address(0)) revert KipuBank_InvalidAddress();
+        if(_token == address(i_usdc)) revert KipuBank_InvalidAddress();
+        if(s_allowedToken[_token]) revert KipuBank_InvalidAddress();
         s_allowedToken[_token] = true;
+        emit KipuBank_TokenApproved(_token);
     }
 
     /// @notice Function to remove token to swap
     /// @param _token The token which is removed
     function removeToken(address _token) external whenPaused onlyOwner {
+        if(_token == address(0)) revert KipuBank_InvalidAddress();
+        if(!s_allowedToken[_token]) revert KipuBank_InvalidAddress();
         s_allowedToken[_token] = false;
+        emit KipuBank_TokenRemoved(_token);
+    }
+
+    /// @notice Function to check if a token is allowed
+    /// @param _token The token address to check
+    /// @return bool True if the token is allowed
+    function isTokenAllowed(address _token) external view returns (bool) {
+        return s_allowedToken[_token];
     }
 
     /// @notice Function to view the balance in USD
