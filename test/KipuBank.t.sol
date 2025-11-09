@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import { BaseTest } from "./BaseTest.t.sol";
-import { IERC20 } from "@openzeppelin/token/ERC20/IERC20.sol";
 import { console } from "forge-std/console.sol";
 
 contract KipuBankTest is BaseTest {
