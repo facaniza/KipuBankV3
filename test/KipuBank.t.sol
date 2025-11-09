@@ -13,6 +13,7 @@ contract KipuBankTest is BaseTest {
     vm.startPrank(FACUNDO);
     vm.expectRevert();
     (bool success, ) = address(sKipu).call{value: amount}("");
+    console.log("Estado de haber hecho la transaccion", success);
     vm.stopPrank();
   }
 
@@ -23,6 +24,7 @@ contract KipuBankTest is BaseTest {
     vm.startPrank(FACUNDO);
     vm.expectRevert();
     (bool success, ) = address(sKipu).call{ value: 0.3 ether }(junk);
+    console.log("Estado de haber hecho la transaccion", success);
     vm.stopPrank();
   }
 
@@ -132,4 +134,16 @@ contract KipuBankTest is BaseTest {
     assertFalse(statusAfter);
   }
 
-}
+  function test_transfer_owner() public {
+    vm.startPrank(FACUNDO);
+    address owner = sKipu.owner();
+    console.log("Previous owner", owner);
+    _pauseAsOwner();
+    
+    sKipu.transferOwnership(OTRO_USER);
+    address newOwner = sKipu.owner();
+    vm.stopPrank();    
+    assertEq(owner, address(FACUNDO));
+    assertEq(newOwner, address(OTRO_USER));
+  }
+} 

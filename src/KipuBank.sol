@@ -542,7 +542,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Function to transfer the ownership another address
     /// @param _newOwner The address of the new owner of the contract
     /// @dev It is used the onlyOwner modifier
-    function transferTheOwnership(address _newOwner) external onlyOwner whenPaused {
+    function transferOwnership(address _newOwner) public onlyOwner whenPaused override {
         
         address previousOwner = owner();
 

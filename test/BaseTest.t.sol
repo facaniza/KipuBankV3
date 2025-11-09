@@ -28,6 +28,7 @@ abstract contract BaseTest is Test {
 
     // Test actor
     address constant FACUNDO = address(0x77);
+    address constant OTRO_USER = address(0x88);
 
     // WETH tiene 18 decimales. 1e17 es 0.1 WETH.
     uint256 constant WETH_INITIAL_AMOUNT = 1e17; // 0.1 WETH (since WETH has 18 decimals)
@@ -68,7 +69,7 @@ abstract contract BaseTest is Test {
         sKipu.pauseContract(); // si hace falta pausar antes de aprobar
         sKipu.approveToken(token);
     }
-    
+
     function _unpauseAsOwner() internal {
         sKipu.unpauseContract();
     }
