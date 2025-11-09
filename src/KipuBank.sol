@@ -46,6 +46,7 @@ interface IUniswapV2Router02 {
 
 contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
+    /// @notice Router of Uniswap
     IUniswapV2Router02 public immutable ROUTER;
 
     /// @notice Pauser contract rol
@@ -97,9 +98,12 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Withdrawal count for the contract
     uint128 private s_withdrawal = 0;    
 
-    /// @notice Storage struct that stores a token amount, in different tokens, for each address
+    /// @notice Storage structure that stores a token amount, in different tokens, for each address
     /// @dev In the first mapping we have token address, in the nested mapping we have the holder and their balance
     mapping (address token => mapping (address holder => uint256 amount)) private s_balances;
+
+    /// @notice Storage structure that stores the allowed tokens
+    mapping(address token => bool) private s_allowedToken;
 
     /// @notice Successful deposit made event
     /// @param holder Holder who made the deposit
@@ -159,9 +163,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Withdrawal rejected error 
     /// @param holder The holder that perfomed the withdrawal
     /// @param amount The amount to withdraw
-    error KipuBank_RejectedWithdraw(address holder, uint256 amount);
-
-    
+    error KipuBank_RejectedWithdraw(address holder, uint256 amount); 
 
     /// @notice Exceeding limit error
     /// @param amount The amount that exceeded the limite
@@ -223,6 +225,10 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice Amount lower than minimum deposit
     /// @param amount The amount that is below the minimum
     error KipuBank_LowerMinimumAmount(uint256 amount);
+
+    ///@notice Error out of time for the swap
+    /// @param time The time of the block timestamp
+    error KipuBank_ExceededTime(uint256 time);
 
     /// @notice Contract constructor
     /// @param _limit The global limit for the contract
@@ -330,7 +336,15 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
         if (_amount > i_threshold) revert KipuBank_ExceededThreshold(_amount);
         if (_amount > s_balances[address(i_usdc)][msg.sender]) revert KipuBank_InsufficientsFunds(msg.sender, _amount);
         _;
-    }    
+    }
+
+    modifier verifyTokenDeposit(uint256 _amountIn, address _tokenIn, uint256 _deadline) {
+        // function depositToken(uint256 _amountIn, uint256 _amountOut, address _tokenIn, uint256 _deadline) external {
+        if(_amountIn == 0)  revert KipuBank_ZeroAmount(msg.sender);
+        if(!s_allowedToken[_tokenIn]) revert KipuBank_InvalidAddress();
+        if(_deadline < block.timestamp) revert KipuBank_ExceededTime(block.timestamp);
+        _;
+    }
 
     /// @notice The function to perform the price query using the oracle
     /// @return priceUSD_ It is return the USD Price
@@ -425,9 +439,19 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
         i_usdc.safeTransferFrom(msg.sender, address(this), _amount);
     }
 
-    function depositToken(uint256 _amountIn, uint256 _amountOut, address _tokenIn, uint256 _deadline) external {
+    /// @notice Function to deposit any token and receive USDC
+    /// @param _amountIn The amount of the token that entered
+    /// @param _amountOut The minimum amount which is expected
+    /// @param _tokenIn The address of the token whas received
+    /// @param _deadline The deadline to perfom the swap
+    function depositToken(uint256 _amountIn, uint256 _amountOut, address _tokenIn, uint256 _deadline) external
+        verifyTokenDeposit(_amountIn, _tokenIn, _deadline)
+        whenNotPaused
+    {
+        if(IERC20(_tokenIn).allowance(msg.sender, address(this)) < _amountIn) revert KipuBank_NonPermittedAmount(_amountIn);
+
         IERC20(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
-        IERC20(i_usdc).safeIncreaseAllowance(address(ROUTER), _amountIn);
+        IERC20(_tokenIn).safeIncreaseAllowance(address(ROUTER), _amountIn);
 
         address[] memory path = new address[](2);
         path[0] = _tokenIn;
@@ -441,7 +465,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
             _amountIn,
             _amountOut,
             path,
-            msg.sender,
+            address(this),
             _deadline
         );
         emit KipuBank_SuccessfulSwap(
@@ -449,11 +473,23 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
             _tokenIn,
             address(i_usdc),
             _amountIn,
-            _amountOut
+            amountsToSwap[amountsToSwap.length - 1]
         );
         s_totalContract += amountsToSwap[amountsToSwap.length - 1];
         s_balances[address(i_usdc)][msg.sender] += amountsToSwap[amountsToSwap.length - 1];
 
+    }
+
+    /// @notice Function to approved tokens to swap
+    /// @param _token The address token which was approved
+    function approveToken(address _token) external whenPaused onlyOwner {
+        s_allowedToken[_token] = true;
+    }
+
+    /// @notice Function to remove token to swap
+    /// @param _token The token which is removed
+    function removeToken(address _token) external whenPaused onlyOwner {
+        s_allowedToken[_token] = false;
     }
 
     /// @notice Function to view the balance in USD
