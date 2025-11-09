@@ -21,7 +21,32 @@ import "@openzeppelin/proxy/utils/UUPSUpgradeable.sol";
 /// @dev We use data feeds interface
 import "@chainlink/interfaces/AggregatorV3Interface.sol";
 
+interface IUniswapV2Router02 {
+
+    function WETH() external pure returns (address);
+
+    function swapExactTokensForTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+
+    function swapExactETHForTokens(
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external payable returns (uint[] memory amounts);
+
+    function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts);
+
+}
+
 contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
+
+    IUniswapV2Router02 public immutable ROUTER;
 
     /// @notice Pauser contract rol
     bytes32 public constant PAUSER = keccak256("PAUSER");
@@ -47,7 +72,7 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
 
     /// @notice Conversion decimals constant
     /// @dev We do the sum of ethereum decimals y chainlink decimals, then we substraction of the USDC decimals, it gave us the basis for equalization
-    uint64 constant DECIMAL_FACTOR = 1 * 10 ** 20;
+    uint256 constant DECIMAL_FACTOR = 1 * 10 ** 20;
 
     /// @notice Fixed Transaction threshold 
     uint256 immutable i_threshold;
@@ -116,10 +141,27 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @param role The role that revoked
     event KipuBank_RoleRevoked(address indexed account, bytes32 role);
 
+    /// @notice Successful swap event
+    /// @param user The that perform the swap
+    /// @param tokenIn The token that the user deposited
+    /// @param tokenOut The token that the user received
+    /// @param amountIn The amount that was entered
+    /// @param amountOut The amount that ther user will receive
+    event KipuBank_SuccessfulSwap
+    (
+        address indexed user,
+        address indexed tokenIn,
+        address indexed tokenOut,
+        uint256 amountIn,
+        uint256 amountOut
+    );
+
     /// @notice Withdrawal rejected error 
     /// @param holder The holder that perfomed the withdrawal
     /// @param amount The amount to withdraw
     error KipuBank_RejectedWithdraw(address holder, uint256 amount);
+
+    
 
     /// @notice Exceeding limit error
     /// @param amount The amount that exceeded the limite
@@ -187,28 +229,26 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @param _threshold The global threshold for the contract
     /// @param _feed The feed address to use
     /// @param _tokenERC20 The address of the ERC20 token to use
+    /// @param _router The address of the Uniswap Router
     /// @dev They must be generated at the time of deployment
     constructor(
         uint256 _limit,
         uint256 _threshold,
         address _owner,
         address _feed,
-        address _tokenERC20
+        address _tokenERC20,
+        address _router
         )
-        Ownable(_owner) 
+        Ownable(_owner)
+        verifyConstructor(_limit, _threshold, _owner, _feed, _tokenERC20, _router)
     {
-        if(_limit == 0) revert KipuBank_InvalidLimit(_limit);
-        if(_threshold == 0) revert KipuBank_InvalidThreshold(_threshold);
-        if(_threshold > _limit) revert KipuBank_InvalidInit(_limit, _threshold);
-        if(_feed == address(0)) revert KipuBank_InvalidAddress();
-        if(_tokenERC20 == address(0)) revert KipuBank_InvalidAddress();
-        
         _grantRole(DEFAULT_ADMIN_ROLE, _owner);
         _grantRole(PAUSER, _owner);
         _grantRole(FEED_MANAGER, _owner);
 
         i_usdc = IERC20(_tokenERC20);
         s_feed = AggregatorV3Interface(_feed);
+        ROUTER = IUniswapV2Router02(_router);
         i_bankCap = _limit;
         i_threshold = _threshold;
     }
@@ -220,6 +260,30 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
     /// @notice The function fallback() is not permitted
     /// @dev The contract should not send data with no autorization
     fallback() external payable { revert KipuBank_NonPermittedOperation(msg.sender); }
+
+    /// @notice Modifier to verify the constructor of the contract
+    /// @param _limit The global limit for the contract
+    /// @param _threshold The global threshold for the contract
+    /// @param _feed The feed address to use
+    /// @param _tokenERC20 The address of the ERC20 token to use
+    /// @param _router The address of the Uniswap Router    
+    modifier verifyConstructor(
+        uint256 _limit, 
+        uint256 _threshold, 
+        address _owner, 
+        address _feed, 
+        address _tokenERC20, 
+        address _router
+        ) 
+    {
+        if(_limit == 0) revert KipuBank_InvalidLimit(_limit);
+        if(_threshold == 0) revert KipuBank_InvalidThreshold(_threshold);
+        if(_threshold > _limit) revert KipuBank_InvalidInit(_limit, _threshold);
+        if(_feed == address(0)) revert KipuBank_InvalidAddress();
+        if(_tokenERC20 == address(0)) revert KipuBank_InvalidAddress();
+        if(_router == address(0)) revert KipuBank_InvalidAddress();
+        _;
+    }
 
     /// @notice Modifier to manage function accesss, only role or owner
     /// @param role The role that have permissions
@@ -359,6 +423,37 @@ contract KipuBank is ReentrancyGuard, Ownable, Pausable, AccessControl {
         s_totalContract += _amount;
         emit KipuBank_SuccessfulDeposit(msg.sender, _amount);
         i_usdc.safeTransferFrom(msg.sender, address(this), _amount);
+    }
+
+    function depositToken(uint256 _amountIn, uint256 _amountOut, address _tokenIn, uint256 _deadline) external {
+        IERC20(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
+        IERC20(i_usdc).safeIncreaseAllowance(address(ROUTER), _amountIn);
+
+        address[] memory path = new address[](2);
+        path[0] = _tokenIn;
+        path[1] = address(i_usdc);
+
+        uint[] memory amounts = ROUTER.getAmountsOut(_amountIn, path);
+
+        if(amounts[amounts.length -1] + s_totalContract > i_bankCap) revert KipuBank_ExceededLimit(amounts[amounts.length - 1]);
+
+        uint[] memory amountsToSwap = ROUTER.swapExactTokensForTokens(
+            _amountIn,
+            _amountOut,
+            path,
+            msg.sender,
+            _deadline
+        );
+        emit KipuBank_SuccessfulSwap(
+            msg.sender,
+            _tokenIn,
+            address(i_usdc),
+            _amountIn,
+            _amountOut
+        );
+        s_totalContract += amountsToSwap[amountsToSwap.length - 1];
+        s_balances[address(i_usdc)][msg.sender] += amountsToSwap[amountsToSwap.length - 1];
+
     }
 
     /// @notice Function to view the balance in USD
