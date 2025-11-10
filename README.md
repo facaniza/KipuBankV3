@@ -149,13 +149,8 @@ forge create src/KipuBank.sol:KipuBank \
   --etherscan-api-key $ETHERSCAN_API_KEY \
   --broadcast
 ```
-
-### Interacción Básica con KipuBank en Sepolia usando cast
-
-Contrato ya desplegado:  
-**0xbE1ac936e23b392aBb3652b435A178A693BB0959**
-
 ---
+## Interacciones
 
 ## 1️⃣ Variables de entorno
 
@@ -169,7 +164,7 @@ export SEPOLIA_RPC="https://sepolia.infura.io/v3/TU_INFURA_KEY"
 ```
 ---
 
-## Interacciones
+
 ### Deposito Eth
 ```bash
 cast send $BANK_ADDRESS "depositETH()" --value $(cast to-wei 1 ether) --private-key $PRIVATE_KEY --rpc-url $SEPOLIA_RPC
